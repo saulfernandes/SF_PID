@@ -1,0 +1,41 @@
+##########################################
+# Mapa de Cores de Sintaxe para SF_PID
+##########################################
+
+##########################################
+# Tipos de Dados (KEYWORD1)
+##########################################
+
+SF_PID	KEYWORD1
+
+##########################################
+# Metodos e Funcoes (KEYWORD2)
+##########################################
+
+DefinirModo	KEYWORD2
+Calcular	KEYWORD2
+DefinirLimitesSaida	KEYWORD2
+DefinirAjustes	KEYWORD2
+DefinirDirecao	KEYWORD2
+DefinirTempoAmostragemUs	KEYWORD2
+DefinirSomaSaida	KEYWORD2
+Inicializar	KEYWORD2
+Reiniciar	KEYWORD2
+ObterKp	KEYWORD2
+ObterKi	KEYWORD2
+ObterKd	KEYWORD2
+ObterTermoP	KEYWORD2
+ObterTermoI	KEYWORD2
+ObterTermoD	KEYWORD2
+ObterSomaSaida	KEYWORD2
+ObterModo	KEYWORD2
+ObterDirecao	KEYWORD2
+
+##########################################
+# Constantes (LITERAL1)
+##########################################
+
+automatico	LITERAL1
+manual	LITERAL1
+direto	LITERAL1
+reverso	LITERAL1
