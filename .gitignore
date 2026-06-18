@@ -1,0 +1,18 @@
+# Arquivos do Sistema Operacional
+.DS_Store
+Thumbs.db
+
+# Pastas de IDE e Compiladores
+.vscode/
+.pio/
+build/
+bin/
+obj/
+
+# Arquivos de compilacao C/C++
+*.o
+*.elf
+*.bin
+*.hex
+*.a
+*.map
