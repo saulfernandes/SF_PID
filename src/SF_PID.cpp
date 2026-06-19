@@ -73,7 +73,7 @@ float SF_PID::ProcessarEntrada(float valorLido) {
   return valorLido;
 }
 
-void SF_PID::DefinirEntrada(DfEntrada tipoEntrada) { modoEntrada = tipoEntrada; }
+void SF_PID::DefinirEntrada(Entrada tipoEntrada) { modoEntrada = tipoEntrada; }
 void SF_PID::DefinirEntrada(uint8_t tipoEntrada) { modoEntrada = (Entrada)tipoEntrada; }
 void SF_PID::DefinirCoeficientes(float a, float b, float c, float offset) { coefA = a; coefB = b; coefC = c; offsetSinal = offset; }
 void SF_PID::DefinirFiltro(Filtro tipoFiltro) { modoFiltro = tipoFiltro; primeiraLeitura = true; }

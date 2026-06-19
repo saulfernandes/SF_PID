@@ -9,7 +9,7 @@ class SF_PID {
 
     enum class Controle : uint8_t {manual, automatico};      
     enum class Acao : uint8_t {direto, reverso};             
-    enum class DfEntrada : uint8_t {filtrada, temperatura, pura}; 
+    enum class Entrada : uint8_t {filtrada, temperatura, pura}; 
     enum class Filtro : uint8_t {nenhum, emaAdaptativo, mediana, kalman1D}; 
     
     // Novas Opcoes de Sintonia
@@ -36,7 +36,7 @@ class SF_PID {
     void Reiniciar();         
 
     // Condicionamento de Sinal e Filtros
-    void DefinirEntrada(DfEntrada tipoEntrada);
+    void DefinirEntrada(Entrada tipoEntrada);
     void DefinirEntrada(uint8_t tipoEntrada);
     void DefinirCoeficientes(float a, float b, float c, float offset);
     
@@ -87,7 +87,7 @@ class SF_PID {
 
     Controle modo = Controle::automatico;
     Acao acao = Acao::direto;
-    Entrada modoEntrada = DfEntrada::filtrada;
+    Entrada modoEntrada = Entrada::filtrada;
     Filtro modoFiltro = Filtro::nenhum;
     Sintonia modoSintonia = Sintonia::desligado;
     
