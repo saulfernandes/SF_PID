@@ -9,11 +9,11 @@ class SF_PID {
 
     enum class Controle : uint8_t {manual, automatico};      
     enum class Acao : uint8_t {direto, reverso};             
-    enum class Entrada : uint8_t {filtrada, temperatura, pura}; 
-    enum class Filtro : uint8_t {nenhum, emaAdaptativo, mediana, kalman1D};
+    enum class DfEntrada : uint8_t {filtrada, temperatura, pura}; 
+    enum class Filtro : uint8_t {nenhum, emaAdaptativo, mediana, kalman1D}; 
     
     // Novas Opcoes de Sintonia
-    enum class Sintonia : uint8_t { desligado, zn, tl, heuristica, self, zn_self, tl_self };
+    enum class Sintonia : uint8_t {desligado, zn, tl, heuristica, self, zn_self, tl_self};
 
     // Construtores
     SF_PID();
