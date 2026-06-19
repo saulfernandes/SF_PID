@@ -62,6 +62,7 @@ class SF_PID {
     float ObterTermoI();        
     float ObterTermoD();        
     float ObterSomaSaida();     
+    float ObterAlpha(); 
     uint8_t ObterModo();        
     uint8_t ObterDirecao();     
 

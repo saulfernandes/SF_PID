@@ -343,5 +343,6 @@ float SF_PID::ObterTermoP() { return termoP; }
 float SF_PID::ObterTermoI() { return termoI; }
 float SF_PID::ObterTermoD() { return termoD; }
 float SF_PID::ObterSomaSaida() { return somaSaida; }
+float SF_PID::ObterAlpha() { return alpha; }  
 uint8_t SF_PID::ObterModo() { return static_cast<uint8_t>(modo); }
 uint8_t SF_PID::ObterDirecao() { return static_cast<uint8_t>(acao); }
