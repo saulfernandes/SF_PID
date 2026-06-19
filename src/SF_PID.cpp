@@ -20,9 +20,7 @@ SF_PID::SF_PID(float* Entrada, float* Saida, float* Setpoint,
 SF_PID::SF_PID(float* Entrada, float* Saida, float* Setpoint)
   : SF_PID::SF_PID(Entrada, Saida, Setpoint, 0, 0, 0, Acao::direto) {}
 
-/* Algoritmos de Filtragem e Condicionamento (Ocultados por brevidade, MANTENHA OS SEUS ATUAIS AQUI) */
-// [Nota: Mantenha as funções AplicarFiltro, ProcessarEntrada, DefinirCoeficientes e ConfigurarFiltro exatamente como forneci no bloco anterior. Nao foram alteradas.]
-
+/* Algoritmos de Filtragem e Condicionamento */
 float SF_PID::AplicarFiltro(float valor) {
   if (primeiraLeitura) {
     ultimoValorEMA = valor;
@@ -81,57 +79,52 @@ void SF_PID::DefinirFiltro(uint8_t tipoFiltro) { modoFiltro = (Filtro)tipoFiltro
 void SF_PID::ConfigurarFiltroEMA(float minAlpha, float maxAlpha, float rangeVariacao) { alphaMin = minAlpha; alphaMax = maxAlpha; rangeVar = rangeVariacao; }
 void SF_PID::ConfigurarFiltroKalman(float ruidoMedida, float ruidoProcesso) { rMedida = ruidoMedida; qProcesso = ruidoProcesso; }
 
-
-/* =================================================================================
-   Configuração da SINTONIA (AutoTune)
-================================================================================== */
+/* Configuração da SINTONIA (AutoTune) */
 void SF_PID::DefinirModoSintonia(Sintonia modo) { modoSintonia = modo; }
 void SF_PID::DefinirModoSintonia(uint8_t modo) { modoSintonia = (Sintonia)modo; }
 
 void SF_PID::LigarSintonia() {
   if (modoSintonia == Sintonia::desligado) return;
   sintoniaLigada = true;
-  
-  // Reseta todas as memorias de sintonia
   tuneMax = -9999.0f; tuneMin = 9999.0f;
   tuneCiclos = 0; tuneSomaPeriodo = 0;
   tuneTempoReferencia = millis();
   tuneUltimoCruzamento = millis();
-  
-  if(modoSintonia == Sintonia::heuristica) {
-    heurEstado = 0; // Inicia Maquina de Estados
-  }
-  if(modoSintonia == Sintonia::self || modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) {
-    selfAtuacoes = 0;
-  }
+  if(modoSintonia == Sintonia::heuristica) heurEstado = 0; 
+  if(modoSintonia == Sintonia::self || modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) selfAtuacoes = 0;
 }
 
 void SF_PID::DesligarSintonia() { sintoniaLigada = false; }
 bool SF_PID::SintoniaAtiva() { return sintoniaLigada; }
 
 /* =================================================================================
-   O CÉREBRO: Calcular() com Bifurcação de Sintonia
+   O CÉREBRO: Calcular() com Condicionamento Desvinculado
 ================================================================================== */
 bool SF_PID::Calcular() {
   if (modo == Controle::manual) return false;
+  
+  // 1. CONDICIONAMENTO CONTÍNUO (Roda a cada ciclo da CPU)
+  // Processa o ruído e converte a equação em tempo real
+  float entrada = ProcessarEntrada(*minhaEntrada);
+  
+  // Subscreve a variável global (Input) IMEDIATAMENTE com a Temperatura Limpa.
+  // Assim, a IHM e os logs web sempre lerão °C e nunca o ADC sujo.
+  *minhaEntrada = entrada; 
+
+  // ROTA A: SINTONIA RELÉ (Bang-Bang Contínuo)
+  bool isRelay = (modoSintonia == Sintonia::zn || modoSintonia == Sintonia::tl || 
+                  modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self);
+                  
+  if (sintoniaLigada && isRelay) {
+      ExecutarRelay(entrada);
+      return true; // Devolve controle ao loop 
+  }
+
   uint32_t agora = micros();
   uint32_t variacaoTempo = (agora - ultimoTempo);
   
+  // 2. MATEMÁTICA PID (Roda apenas no Tempo de Amostragem, ex: 500ms)
   if (variacaoTempo >= tempoAmostragemUs) {
-    float entrada = ProcessarEntrada(*minhaEntrada);
-    
-    // ROTA A: SINTONIA RELÉ (Bang-Bang Exclusivo)
-    bool isRelay = (modoSintonia == Sintonia::zn || modoSintonia == Sintonia::tl || 
-                    modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self);
-                    
-    if (sintoniaLigada && isRelay) {
-        ExecutarRelay(entrada);
-        *minhaEntrada = entrada;
-        ultimoTempo = agora;
-        return true; // Pula a matemática PID, o Rele tomou controle da maquina.
-    }
-
-    // ROTA B: CONTROLE PID NORMAL (Para Controle Real, Heuristica e Self)
     float dEntrada = entrada - ultimaEntrada;
     if (acao == Acao::reverso) dEntrada = -dEntrada;
 
@@ -155,7 +148,6 @@ bool SF_PID::Calcular() {
     *minhaSaida = constrain(somaSaida + termoD, saidaMin, saidaMax); 
 
     ultimoErro = erro; ultimaEntrada = entrada; ultimoTempo = agora;
-    *minhaEntrada = entrada;
 
     // ROTA C: SUPERVISORES (Rondam em background junto com o PID)
     if (sintoniaLigada) {
@@ -171,12 +163,10 @@ bool SF_PID::Calcular() {
 /* =================================================================================
    MOTORES DE INTELIGÊNCIA
 ================================================================================== */
-
 void SF_PID::ExecutarRelay(float entradaLida) {
     if (entradaLida > tuneMax) tuneMax = entradaLida;
     if (entradaLida < tuneMin) tuneMin = entradaLida;
 
-    // Histerese para evitar repiques de ruidos no zero
     bool cruzouCima = (entradaLida > *meuSetpoint + 0.1f);
     bool cruzouBaixo = (entradaLida < *meuSetpoint - 0.1f);
 
@@ -194,31 +184,25 @@ void SF_PID::ExecutarRelay(float entradaLida) {
         *minhaSaida = saidaMin;
     }
 
-    // Atingiu 8 Ciclos Reais (Requisito)
     if (tuneCiclos >= 8) {
-        float Tu = (tuneSomaPeriodo / 8.0f) / 1000.0f; // Em segundos
+        float Tu = (tuneSomaPeriodo / 8.0f) / 1000.0f;
         float amplitude = (tuneMax - tuneMin) / 2.0f;
         float Ku = (4.0f * (saidaMax - saidaMin)) / (3.14159f * amplitude);
 
         float nKp = 0, nKi = 0, nKd = 0;
 
         if (modoSintonia == Sintonia::zn || modoSintonia == Sintonia::zn_self) {
-            nKp = 0.6f * Ku;
-            nKi = (2.0f * nKp) / Tu;
-            nKd = (nKp * Tu) / 8.0f;
-        } else { // TL
-            nKp = 0.31f * Ku;
-            nKi = nKp / (2.2f * Tu);
-            nKd = (nKp * Tu) / 6.3f;
+            nKp = 0.6f * Ku; nKi = (2.0f * nKp) / Tu; nKd = (nKp * Tu) / 8.0f;
+        } else {
+            nKp = 0.31f * Ku; nKi = nKp / (2.2f * Tu); nKd = (nKp * Tu) / 6.3f;
         }
         
         DefinirAjustes(nKp, nKi, nKd);
 
         if (modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) {
-            modoSintonia = Sintonia::self; // Troca automaticamente
-            LigarSintonia(); // Reinicia memorias pro self
+            modoSintonia = Sintonia::self; LigarSintonia(); 
         } else {
-            DesligarSintonia(); // Finalizou puro ZN/TL
+            DesligarSintonia(); 
         }
     }
 }
@@ -228,52 +212,42 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
     if (entradaLida > tuneMax) tuneMax = entradaLida;
     if (entradaLida < tuneMin) tuneMin = entradaLida;
 
-    // Estado 0: Inicializacao Manual
     if (heurEstado == 0) {
-        DefinirAjustes(50.0f, 0.0f, 0.0f); // Inicia Kp em 50
+        DefinirAjustes(50.0f, 0.0f, 0.0f); 
         passoKp = 20.0f; passoKi = 0.0025f; passoKd = 0.001f;
-        heurEstado = 1;
-        tuneTempoReferencia = agoraMil;
+        heurEstado = 1; tuneTempoReferencia = agoraMil;
         return;
     }
 
-    // Estado 1: Kp (Espera 15 min = 900.000 ms)
     if (heurEstado == 1 && (agoraMil - tuneTempoReferencia >= 900000)) {
         float variacao = tuneMax - tuneMin;
-        
         if (variacao > 0.5f) { 
-            // Oscilou! Recua e diminui o passo.
             DefinirAjustes(dispKp - passoKp, 0, 0);
-            passoKp /= 4.0f; // Reduz de 20 para 5.
-            if (passoKp < 2.0f) { heurEstado = 2; } // Equilibrio perfeito atingido
+            passoKp /= 4.0f; 
+            if (passoKp < 2.0f) { heurEstado = 2; } 
         } else {
-            // Estavel, continua subindo
             DefinirAjustes(dispKp + passoKp, 0, 0);
         }
-        tuneMax = -9999; tuneMin = 9999;
-        tuneTempoReferencia = agoraMil;
+        tuneMax = -9999; tuneMin = 9999; tuneTempoReferencia = agoraMil;
     }
 
-    // Estado 2: Ki (Espera 30 min = 1.800.000 ms)
     if (heurEstado == 2 && (agoraMil - tuneTempoReferencia >= 1800000)) {
         float erroAtual = abs(*meuSetpoint - entradaLida);
         if (erroAtual <= 0.2f) {
-            heurEstado = 3; // Chegou no alvo, vamos pro derivativo
+            heurEstado = 3; 
         } else {
             DefinirAjustes(dispKp, dispKi + passoKi, 0);
         }
-        tuneMax = -9999; tuneMin = 9999;
-        tuneTempoReferencia = agoraMil;
+        tuneMax = -9999; tuneMin = 9999; tuneTempoReferencia = agoraMil;
     }
 
-    // Estado 3: Kd (Espera 10 min = 600.000 ms)
     if (heurEstado == 3 && (agoraMil - tuneTempoReferencia >= 600000)) {
         float erroAcima = entradaLida - *meuSetpoint;
-        if (erroAcima > 0.5f) { // Teve overshoot grave
+        if (erroAcima > 0.5f) { 
             DefinirAjustes(dispKp, dispKi, dispKd + passoKd);
             tuneTempoReferencia = agoraMil;
         } else {
-            DesligarSintonia(); // SINTONIA CONCLUIDA COM SUCESSO!
+            DesligarSintonia(); 
         }
     }
 }
@@ -282,42 +256,35 @@ void SF_PID::ExecutarSelf(float entradaLida) {
     if (entradaLida > tuneMax) tuneMax = entradaLida;
     if (entradaLida < tuneMin) tuneMin = entradaLida;
 
-    // Detecta Ciclos cruzando o Setpoint
     if (entradaLida > *meuSetpoint && !cruzouSP) { cruzouSP = true; tuneCiclos++; }
     if (entradaLida < *meuSetpoint && cruzouSP)  { cruzouSP = false; }
 
-    // Avalia a cada 5 ciclos confirmados
     if (tuneCiclos >= 5) {
         float variacao = tuneMax - tuneMin;
         float erroAtual = abs(*meuSetpoint - entradaLida);
-        
         bool atuou = false;
 
-        if (variacao > 1.0f) { // Amortecendo oscilacao
-            DefinirAjustes(dispKp * 0.90f, dispKi, dispKd * 1.10f);
-            atuou = true;
-        } else if (erroAtual > 1.0f) { // Longe do Alvo
-            DefinirAjustes(dispKp * 1.15f, dispKi, dispKd);
-            atuou = true;
-        } else if (erroAtual > 0.2f && erroAtual <= 1.0f) { // Offset final
-            DefinirAjustes(dispKp, dispKi * 1.08f, dispKd);
-            atuou = true;
+        if (variacao > 1.0f) { 
+            DefinirAjustes(dispKp * 0.90f, dispKi, dispKd * 1.10f); atuou = true;
+        } else if (erroAtual > 1.0f) { 
+            DefinirAjustes(dispKp * 1.15f, dispKi, dispKd); atuou = true;
+        } else if (erroAtual > 0.2f && erroAtual <= 1.0f) { 
+            DefinirAjustes(dispKp, dispKi * 1.08f, dispKd); atuou = true;
         }
 
-        tuneMax = -9999; tuneMin = 9999;
-        tuneCiclos = 0;
+        tuneMax = -9999; tuneMin = 9999; tuneCiclos = 0;
         
         if (atuou) {
             selfAtuacoes++;
-            if (selfAtuacoes >= 20) DesligarSintonia(); // Criterio de Fim
+            if (selfAtuacoes >= 20) DesligarSintonia(); 
         } else {
-            DesligarSintonia(); // Finalizou por estabilidade perfeita
+            DesligarSintonia(); 
         }
     }
 }
 
 /* =================================================================================
-   Funções Padrão de Configuração Restantes (Ajustes, Tempo, Limites)
+   Funções Padrão de Configuração
 ================================================================================== */
 void SF_PID::DefinirAjustes(float Kp, float Ki, float Kd) {
   if (Kp < 0 || Ki < 0 || Kd < 0) return;
