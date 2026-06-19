@@ -90,12 +90,42 @@ void SF_PID::LigarSintonia() {
   tuneCiclos = 0; tuneSomaPeriodo = 0;
   tuneTempoReferencia = millis();
   tuneUltimoCruzamento = millis();
+  tunePassos = 1;
+  
   if(modoSintonia == Sintonia::heuristica) heurEstado = 0; 
   if(modoSintonia == Sintonia::self || modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) selfAtuacoes = 0;
 }
 
 void SF_PID::DesligarSintonia() { sintoniaLigada = false; }
 bool SF_PID::SintoniaAtiva() { return sintoniaLigada; }
+
+String SF_PID::ObterStatusSintonia() {
+    if (!sintoniaLigada || modoSintonia == Sintonia::desligado) {
+        return "Sintonia Inativa";
+    }
+
+    if (modoSintonia == Sintonia::zn || modoSintonia == Sintonia::tl || 
+        modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) {
+        return "Rele: Buscando oscilacao sustentada (Ciclo " + String(tuneCiclos) + "/8)";
+    }
+
+    if (modoSintonia == Sintonia::heuristica) {
+        if (heurEstado == 1 || heurEstado == 11 || heurEstado == 12) {
+            return "Heuristica: Ajustando Kp (Calculo " + String(tunePassos) + ")";
+        } else if (heurEstado == 2 || heurEstado == 21) {
+            return "Heuristica: Ajustando Ki (Calculo " + String(tunePassos) + ")";
+        } else if (heurEstado == 3) {
+            return "Heuristica: Ajustando Kd (Calculo " + String(tunePassos) + ")";
+        }
+        return "Heuristica: Inicializando...";
+    }
+
+    if (modoSintonia == Sintonia::self) {
+        return "Self: Avaliando onda (Ciclo " + String(tuneCiclos) + "/5) | Atuacoes: " + String(selfAtuacoes) + "/20";
+    }
+
+    return "Status Desconhecido";
+}
 
 /* =================================================================================
    O CÉREBRO: Calcular() com Condicionamento Desvinculado
@@ -204,109 +234,90 @@ void SF_PID::ExecutarRelay(float entradaLida) {
 void SF_PID::ExecutarHeuristica(float entradaLida) {
     uint32_t agoraMil = millis();
 
-    // Registra os picos da janela atual continuamente
-    if (entradaLida > tuneMax) tuneMax = entradaLida;
-    if (entradaLida < tuneMin) tuneMin = entradaLida;
-
     // =========================================================
     // Estado 0: Inicialização
     // =========================================================
     if (heurEstado == 0) {
-        DefinirAjustes(100.0f, 0.0f, 0.0f); // Kp inicial alterado para 100
+        DefinirAjustes(100.0f, 0.0f, 0.0f); // Kp inicial de 100
         passoKp = 20.0f; passoKi = 0.0025f; passoKd = 0.001f;
-        tuneMax = -9999.0f; 
-        tuneMin = 9999.0f;
         heurEstado = 1; 
+        tunePassos = 1;
         tuneTempoReferencia = agoraMil;
         return;
     }
 
+    uint32_t tempoNaJanela = agoraMil - tuneTempoReferencia;
+
     // =========================================================
     // ESTÁGIO 1: AJUSTE DO Kp (Janelas de 15 min = 900.000 ms)
     // =========================================================
-    // Estado 1: Primeira janela (Decide a direção da busca)
-    if (heurEstado == 1) { 
-        if (agoraMil - tuneTempoReferencia >= 900000) {
+    if (heurEstado == 1 || heurEstado == 11 || heurEstado == 12) {
+        
+        // FASE CEGA: 10 minutos (600.000 ms). Ignora a rampa térmica.
+        if (tempoNaJanela < 600000) {
+            tuneMax = entradaLida;
+            tuneMin = entradaLida;
+        } 
+        // FASE DE OBSERVAÇÃO: 5 minutos finais (300.000 ms). Captura a oscilação real.
+        else if (tempoNaJanela < 900000) {
+            if (entradaLida > tuneMax) tuneMax = entradaLida;
+            if (entradaLida < tuneMin) tuneMin = entradaLida;
+        } 
+        // FIM DA JANELA: Executa a Lógica de Tomada de Decisão
+        else {
             float variacaoAtual = tuneMax - tuneMin;
-            tuneMaxAntigo = tuneMax;
-            tuneMinAntigo = tuneMin;
 
-            if (variacaoAtual > 0.5f) {
-                // Começou instável! Inverte o processo e busca a estabilidade descendo.
-                float novoKp = dispKp - passoKp;
-                if (novoKp < 1.0f) novoKp = 1.0f; // Proteção
-                DefinirAjustes(novoKp, 0, 0); 
-                heurEstado = 12; // Vai para o Modo de Descida
-            } else {
-                // Começou estável. Continua o processo normal subindo.
-                DefinirAjustes(dispKp + passoKp, 0, 0); 
-                heurEstado = 11; // Vai para o Modo de Subida
-            }
-            
-            tuneMax = -9999.0f; tuneMin = 9999.0f;
-            tuneTempoReferencia = agoraMil;
-        }
-        return;
-    }
-    
-    // Estado 11: Modo de Subida (Procurando a instabilidade)
-    if (heurEstado == 11) { 
-        if (agoraMil - tuneTempoReferencia >= 900000) {
-            float variacaoAtual = tuneMax - tuneMin;
-            float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
-            
-            if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) { 
-                // Bateu no teto de instabilidade!
-                DefinirAjustes(dispKp - passoKp, 0, 0); // Recua para o último valor seguro
-                passoKp /= 4.0f; // Refina o passo (ex: de 20 para 5)
-                
-                if (passoKp < 2.0f) { 
-                    heurEstado = 2; // Kp perfeito encontrado. Vai para o Ki.
+            if (heurEstado == 1) { // Primeira Janela (Decide Direção)
+                tuneMaxAntigo = tuneMax;
+                tuneMinAntigo = tuneMin;
+                if (variacaoAtual > 0.5f) {
+                    float novoKp = dispKp - passoKp;
+                    DefinirAjustes(novoKp < 1.0f ? 1.0f : novoKp, 0, 0); 
+                    heurEstado = 12; // Modo de Descida
                 } else {
-                    DefinirAjustes(dispKp + passoKp, 0, 0); // Tenta subir com o novo passo menor
+                    DefinirAjustes(dispKp + passoKp, 0, 0); 
+                    heurEstado = 11; // Modo de Subida
                 }
-            } else {
-                // Seguro continuar subindo
-                DefinirAjustes(dispKp + passoKp, 0, 0);
-            }
-            
-            tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
-            tuneMax = -9999.0f; tuneMin = 9999.0f;
-            
-            if (heurEstado == 2) { tuneMax = -9999.0f; tuneMin = 9999.0f; } // Zera para a fase Ki
-            tuneTempoReferencia = agoraMil;
-        }
-        return;
-    }
-
-    // Estado 12: Modo de Descida (Procurando o chão de estabilidade)
-    if (heurEstado == 12) {
-        if (agoraMil - tuneTempoReferencia >= 900000) {
-            float variacaoAtual = tuneMax - tuneMin;
-
-            if (variacaoAtual <= 0.5f) {
-                // Finalmente encontrou a estabilidade! O valor atual é bom.
-                passoKp /= 4.0f; // Refina o passo
-                
-                if (passoKp < 2.0f) {
-                    heurEstado = 2; // Kp perfeito encontrado
+                tunePassos++;
+            } 
+            else if (heurEstado == 11) { // Modo de Subida (Procura Instabilidade)
+                float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
+                if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) { 
+                    DefinirAjustes(dispKp - passoKp, 0, 0); 
+                    passoKp /= 4.0f; 
+                    if (passoKp < 2.0f) { 
+                        heurEstado = 2; // Kp perfeito
+                        tunePassos = 1; // Zera para fase Ki
+                    } else {
+                        DefinirAjustes(dispKp + passoKp, 0, 0); 
+                        tunePassos++;
+                    }
                 } else {
-                    // Agora que encontrou a base estável, inverte a direção para refinar subindo
                     DefinirAjustes(dispKp + passoKp, 0, 0);
-                    heurEstado = 11; 
+                    tunePassos++;
                 }
-            } else {
-                // Continua a retirar Kp até o sistema estabilizar
-                float novoKp = dispKp - passoKp;
-                if (novoKp < 1.0f) novoKp = 1.0f; // Proteção
-                DefinirAjustes(novoKp, 0, 0);
+                tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
             }
-            
-            tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
-            tuneMax = -9999.0f; tuneMin = 9999.0f;
-            
-            if (heurEstado == 2) { tuneMax = -9999.0f; tuneMin = 9999.0f; }
-            tuneTempoReferencia = agoraMil;
+            else if (heurEstado == 12) { // Modo de Descida (Procura Estabilidade)
+                if (variacaoAtual <= 0.5f) {
+                    passoKp /= 4.0f; 
+                    if (passoKp < 2.0f) {
+                        heurEstado = 2; // Kp perfeito
+                        tunePassos = 1; // Zera para fase Ki
+                    } else {
+                        DefinirAjustes(dispKp + passoKp, 0, 0);
+                        heurEstado = 11; // Inverte para subir
+                        tunePassos++;
+                    }
+                } else {
+                    float novoKp = dispKp - passoKp;
+                    DefinirAjustes(novoKp < 1.0f ? 1.0f : novoKp, 0, 0);
+                    tunePassos++;
+                }
+                tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
+            }
+
+            tuneTempoReferencia = agoraMil; // Zera cronômetro para próxima janela
         }
         return;
     }
@@ -314,43 +325,50 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
     // =========================================================
     // ESTÁGIO 2: AJUSTE DO Ki (Janelas de 30 min = 1.800.000 ms)
     // =========================================================
-    if (heurEstado == 2) { 
-        if (agoraMil - tuneTempoReferencia >= 1800000) {
-            tuneMaxAntigo = tuneMax;
-            tuneMinAntigo = tuneMin;
-            
-            float erroAtual = abs(*meuSetpoint - entradaLida);
-            if (erroAtual <= 0.2f) {
-                heurEstado = 3; 
-            } else {
-                DefinirAjustes(dispKp, dispKi + passoKi, 0); 
-                heurEstado = 21; 
-            }
-            tuneMax = -9999.0f; tuneMin = 9999.0f;
-            tuneTempoReferencia = agoraMil;
-        }
-        return;
-    }
-    
-    if (heurEstado == 21) { 
-        if (agoraMil - tuneTempoReferencia >= 1800000) {
+    if (heurEstado == 2 || heurEstado == 21) {
+        
+        // FASE CEGA: 20 minutos (1.200.000 ms)
+        if (tempoNaJanela < 1200000) {
+            tuneMax = entradaLida;
+            tuneMin = entradaLida;
+        } 
+        // FASE DE OBSERVAÇÃO: 10 minutos finais (600.000 ms)
+        else if (tempoNaJanela < 1800000) {
+            if (entradaLida > tuneMax) tuneMax = entradaLida;
+            if (entradaLida < tuneMin) tuneMin = entradaLida;
+        } 
+        // FIM DA JANELA: Lógica de Decisão do Ki
+        else {
             float erroAtual = abs(*meuSetpoint - entradaLida);
             float variacaoAtual = tuneMax - tuneMin;
-            float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
 
-            if (erroAtual <= 0.2f) {
-                heurEstado = 3; 
+            if (heurEstado == 2) {
+                tuneMaxAntigo = tuneMax;
+                tuneMinAntigo = tuneMin;
+                if (erroAtual <= 0.2f) {
+                    heurEstado = 3; 
+                    tunePassos = 1; // Zera para fase Kd
+                } else {
+                    DefinirAjustes(dispKp, dispKi + passoKi, 0); 
+                    heurEstado = 21; 
+                    tunePassos++;
+                }
             } 
-            else if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) {
-                DefinirAjustes(dispKp, dispKi - passoKi, 0);
-                passoKi /= 2.0f; 
-            } 
-            else {
-                DefinirAjustes(dispKp, dispKi + passoKi, 0);
+            else if (heurEstado == 21) {
+                float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
+                if (erroAtual <= 0.2f) {
+                    heurEstado = 3; 
+                    tunePassos = 1; // Zera para fase Kd
+                } else if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) {
+                    DefinirAjustes(dispKp, dispKi - passoKi, 0);
+                    passoKi /= 2.0f; 
+                    tunePassos++;
+                } else {
+                    DefinirAjustes(dispKp, dispKi + passoKi, 0);
+                    tunePassos++;
+                }
+                tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
             }
-
-            tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
-            tuneMax = -9999.0f; tuneMin = 9999.0f;
             tuneTempoReferencia = agoraMil;
         }
         return;
@@ -360,16 +378,20 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
     // ESTÁGIO 3: AJUSTE DO Kd (Janelas de 10 min = 600.000 ms)
     // =========================================================
     if (heurEstado == 3) {
-        if (agoraMil - tuneTempoReferencia >= 600000) {
+        // Para o Kd, precisamos capturar picos o tempo TODO (sem fase cega)
+        if (entradaLida > tuneMax) tuneMax = entradaLida;
+        
+        if (tempoNaJanela >= 600000) {
             float overshootAtual = tuneMax - *meuSetpoint;
             
             if (overshootAtual > 0.5f) { 
                 DefinirAjustes(dispKp, dispKi, dispKd + passoKd);
                 tuneTempoReferencia = agoraMil;
+                tunePassos++;
             } else {
                 DesligarSintonia(); 
             }
-            tuneMax = -9999.0f; tuneMin = 9999.0f;
+            tuneMax = -9999.0f; // Reinicia apenas o Max
         }
         return;
     }

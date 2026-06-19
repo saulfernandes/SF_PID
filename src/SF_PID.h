@@ -1,5 +1,7 @@
 #pragma once
 #include <stdint.h>
+#include <Arduino.h>
+
 #ifndef SF_PID_h
 #define SF_PID_h
 
@@ -52,7 +54,9 @@ class SF_PID {
     void DefinirModoSintonia(uint8_t modo);
     void LigarSintonia();
     void DesligarSintonia();
-    bool SintoniaAtiva(); // Retorna true se estiver sintonizando, false se acabou
+    bool SintoniaAtiva(); 
+    
+    String ObterStatusSintonia(); // NOVO: Retorna o texto da etapa atual
 
     // Funcoes de Consulta (Query) 
     float ObterKp();            
@@ -118,6 +122,7 @@ class SF_PID {
     uint8_t tuneCiclos = 0;
     float tuneSomaPeriodo = 0;
     bool estadoRele = false;
+    uint16_t tunePassos = 1; // NOVO: Rastreador de calculos
 
     // Memorias Heuristica (Manual)
     uint8_t heurEstado = 0;
