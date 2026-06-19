@@ -102,6 +102,7 @@ class SF_PID {
     float coefA = -0.0000004f, coefB = 0.02745f, coefC = -16.547f, offsetSinal = 0.0f;
     
     // Variaveis dos Filtros
+    float alpha;
     float alphaMin = 0.05f, alphaMax = 0.8f, rangeVar = 20.0f;
     float ultimoValorEMA = 0.0f;
     float bufferMediana[15] = {0};

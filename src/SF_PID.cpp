@@ -32,7 +32,7 @@ float SF_PID::AplicarFiltro(float valor) {
   if (modoFiltro == Filtro::emaAdaptativo) {
     float variacao = abs(valor - ultimoValorEMA);
     float proporcao = variacao / rangeVar; 
-    float alpha = alphaMin + (alphaMax - alphaMin) * proporcao;
+    alpha = alphaMin + (alphaMax - alphaMin) * proporcao;
     alpha = constrain(alpha, alphaMin, alphaMax);
     ultimoValorEMA = (alpha * valor) + ((1.0f - alpha) * ultimoValorEMA);
     return ultimoValorEMA;
