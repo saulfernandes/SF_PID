@@ -86,3 +86,64 @@ Tradução Lógica:
 VANTAGENS:
 - Reduz o tamanho do código fonte, eliminando a poluição visual de múltiplas linhas de "if" e "else" para atribuições de variáveis simples.
 ====================================================================
+
+
+
+Passo 1: Escolher o Método
+No seu setup_PID(), você primeiro ativa qual motor de filtragem vai usar:
+
+C++
+ctrl_1.DefinirFiltro(SF_PID::Filtro::emaAdaptativo);
+// Opções: nenhum, emaAdaptativo, mediana, kalman1D
+Passo 2: Configurar os Parâmetros do Método Escolhido
+1. EMA Adaptativo (emaAdaptativo) - Sua configuração atual
+Ajusta a filtragem dinamicamente. Se a variação for pequena (ruído), ele filtra muito. Se for grande (aquecimento real), ele "abre" o filtro para não atrasar a leitura do PID.
+
+Comando: ctrl_1.ConfigurarFiltroEMA(minAlpha, maxAlpha, rangeVariacao);
+
+Parâmetros:
+
+minAlpha (O "esmagador" de ruído): Define a filtragem quando o sinal está estável.
+
+Aceitável: 0.001 a 0.1.
+
+Recomendado: 0.02 a 0.05. (Valores menores que 0.01 deixam a leitura muito congelada).
+
+maxAlpha (A velocidade de resposta): Define a filtragem quando a máquina está esquentando rápido.
+
+Aceitável: 0.1 a 1.0.
+
+Recomendado: 0.5 a 0.8. (1.0 significa "passar direto sem filtrar nada").
+
+rangeVariacao (O gatilho): Quantos pontos o sinal bruto precisa pular para o filtro entender que é uma rampa de aquecimento e não apenas ruído.
+
+Como seu ADC lê valores brutos na casa de 1300: O ruído elétrico normal deve oscilar uns 10 a 20 pontos.
+
+Recomendado: 30.0 a 50.0. (Isso significa que saltos menores que 30 são esmagados pelo minAlpha, saltos maiores ativam o maxAlpha).
+
+2. Filtro de Mediana (mediana)
+É um escudo contra picos absurdos (outliers). Ele guarda 15 leituras, ignora as mais altas e as mais baixas, e passa a do meio. Excelente se houver contator batendo perto do cabo do sensor gerando surtos elétricos falsos.
+
+Comando: Não precisa de comando de configuração. Basta selecionar o filtro no Passo 1.
+
+Parâmetros: Nenhum. Ele já está otimizado internamente com um Ring Buffer de 15 amostras, que é o limite ideal para não atrasar a CPU do ESP32.
+
+3. Filtro de Kalman 1D (kalman1D)
+O estado da arte matemático. Ele tenta adivinhar a temperatura real baseando-se no histórico e na incerteza do sensor. Excelente se o sinal estiver "chuviscando" constantemente de forma caótica.
+
+Comando: ctrl_1.ConfigurarFiltroKalman(ruidoMedida, ruidoProcesso);
+
+Parâmetros:
+
+ruidoMedida (Incerteza do Sensor/Cabo): O quão ruidosa é a sua leitura bruta.
+
+Aceitável: Qualquer valor maior que 0.
+
+Recomendado: 2.0 a 10.0. Quanto maior este número, menos o filtro confia no sensor e mais ele "suaviza" a curva.
+
+ruidoProcesso (Incerteza Física): O quão rápido a sua resistência consegue esquentar a água de verdade.
+
+Aceitável: Valores muito pequenos (0.001 a 1.0).
+
+Recomendado: 0.01 a 0.1. Como o aquecimento térmico tem alta inércia (demora pra subir), um valor baixo avisa o filtro que mudanças instantâneas são impossíveis fisicamente, forçando-o a ignorá-las.
+

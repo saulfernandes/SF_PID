@@ -103,12 +103,8 @@ bool SF_PID::SintoniaAtiva() { return sintoniaLigada; }
 bool SF_PID::Calcular() {
   if (modo == Controle::manual) return false;
   
-  // 1. CONDICIONAMENTO CONTÍNUO (Roda a cada ciclo da CPU)
-  // Processa o ruído e converte a equação em tempo real
+  // 1. CONDICIONAMENTO CONTÍNUO
   float entrada = ProcessarEntrada(*minhaEntrada);
-  
-  // Subscreve a variável global (Input) IMEDIATAMENTE com a Temperatura Limpa.
-  // Assim, a IHM e os logs web sempre lerão °C e nunca o ADC sujo.
   *minhaEntrada = entrada; 
 
   // ROTA A: SINTONIA RELÉ (Bang-Bang Contínuo)
@@ -117,39 +113,37 @@ bool SF_PID::Calcular() {
                   
   if (sintoniaLigada && isRelay) {
       ExecutarRelay(entrada);
-      return true; // Devolve controle ao loop 
+      return true; 
   }
 
   uint32_t agora = micros();
   uint32_t variacaoTempo = (agora - ultimoTempo);
   
-  // 2. MATEMÁTICA PID (Roda apenas no Tempo de Amostragem, ex: 500ms)
+  // 2. MATEMÁTICA PID CLÁSSICA
   if (variacaoTempo >= tempoAmostragemUs) {
     float dEntrada = entrada - ultimaEntrada;
-    if (acao == Acao::reverso) dEntrada = -dEntrada;
-
     erro = *meuSetpoint - entrada;
-    if (acao == Acao::reverso) erro = -erro;
-    float dErro = erro - ultimoErro;
 
-    float termoPm = kp * dEntrada;
-    termoP = -termoPm; 
-    termoI = ki * erro;
-    termoD = -kd * dEntrada; 
+    if (acao == Acao::reverso) {
+        dEntrada = -dEntrada;
+        erro = -erro;
+    }
 
-    bool aw = false;
-    float saidaTermoI = (-termoPm) + ki * (termoI + erro);
-    if (saidaTermoI > saidaMax && dErro > 0) aw = true;
-    else if (saidaTermoI < saidaMin && dErro < 0) aw = true;
-    if (aw && ki > 0) termoI = constrain(saidaTermoI, -saidaMax, saidaMax);
+    // O Coração do PID Clássico (PonE - Proporcional no Erro)
+    termoP = kp * erro;          // Proporcional no Erro (Empurra pro Alvo)
+    termoI = ki * erro;          // Integral (Mata o erro de regime)
+    termoD = -kd * dEntrada;     // Derivativo na Medição (Freia a velocidade, não chuta no SP)
 
-    somaSaida += termoI;                                                 
-    somaSaida = constrain(somaSaida - termoPm, saidaMin, saidaMax); 
-    *minhaSaida = constrain(somaSaida + termoD, saidaMin, saidaMax); 
+    // Acumulador Integral com Anti-Windup
+    somaSaida += termoI;
+    somaSaida = constrain(somaSaida, saidaMin, saidaMax);
+
+    // Soma Final
+    *minhaSaida = constrain(termoP + somaSaida + termoD, saidaMin, saidaMax);
 
     ultimoErro = erro; ultimaEntrada = entrada; ultimoTempo = agora;
 
-    // ROTA C: SUPERVISORES (Rondam em background junto com o PID)
+    // ROTA C: SUPERVISORES
     if (sintoniaLigada) {
         if (modoSintonia == Sintonia::heuristica) ExecutarHeuristica(entrada);
         else if (modoSintonia == Sintonia::self) ExecutarSelf(entrada);
