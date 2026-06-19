@@ -122,6 +122,8 @@ class SF_PID {
     // Memorias Heuristica (Manual)
     uint8_t heurEstado = 0;
     float passoKp = 20.0f, passoKi = 0.0025f, passoKd = 0.001f;
+    float tuneMaxAntigo = 0.0f;
+    float tuneMinAntigo = 0.0f;
 
     // Memorias Self
     uint8_t selfAtuacoes = 0;

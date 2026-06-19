@@ -203,46 +203,141 @@ void SF_PID::ExecutarRelay(float entradaLida) {
 
 void SF_PID::ExecutarHeuristica(float entradaLida) {
     uint32_t agoraMil = millis();
+
+    // Registra os picos da janela atual continuamente
     if (entradaLida > tuneMax) tuneMax = entradaLida;
     if (entradaLida < tuneMin) tuneMin = entradaLida;
 
+    // =========================================================
+    // Estado 0: Inicialização
+    // =========================================================
     if (heurEstado == 0) {
         DefinirAjustes(50.0f, 0.0f, 0.0f); 
         passoKp = 20.0f; passoKi = 0.0025f; passoKd = 0.001f;
-        heurEstado = 1; tuneTempoReferencia = agoraMil;
+        tuneMax = -9999.0f; 
+        tuneMin = 9999.0f;
+        heurEstado = 1; 
+        tuneTempoReferencia = agoraMil;
         return;
     }
 
-    if (heurEstado == 1 && (agoraMil - tuneTempoReferencia >= 900000)) {
-        float variacao = tuneMax - tuneMin;
-        if (variacao > 0.5f) { 
-            DefinirAjustes(dispKp - passoKp, 0, 0);
-            passoKp /= 4.0f; 
-            if (passoKp < 2.0f) { heurEstado = 2; } 
-        } else {
-            DefinirAjustes(dispKp + passoKp, 0, 0);
-        }
-        tuneMax = -9999; tuneMin = 9999; tuneTempoReferencia = agoraMil;
-    }
-
-    if (heurEstado == 2 && (agoraMil - tuneTempoReferencia >= 1800000)) {
-        float erroAtual = abs(*meuSetpoint - entradaLida);
-        if (erroAtual <= 0.2f) {
-            heurEstado = 3; 
-        } else {
-            DefinirAjustes(dispKp, dispKi + passoKi, 0);
-        }
-        tuneMax = -9999; tuneMin = 9999; tuneTempoReferencia = agoraMil;
-    }
-
-    if (heurEstado == 3 && (agoraMil - tuneTempoReferencia >= 600000)) {
-        float erroAcima = entradaLida - *meuSetpoint;
-        if (erroAcima > 0.5f) { 
-            DefinirAjustes(dispKp, dispKi, dispKd + passoKd);
+    // =========================================================
+    // ESTÁGIO 1: AJUSTE DO Kp (Janelas de 15 min = 900.000 ms)
+    // =========================================================
+    // Estado 1: Primeira janela (Coleta a linha de base)
+    if (heurEstado == 1) { 
+        if (agoraMil - tuneTempoReferencia >= 900000) {
+            tuneMaxAntigo = tuneMax;
+            tuneMinAntigo = tuneMin;
+            
+            DefinirAjustes(dispKp + passoKp, 0, 0); // Sobe o Kp para testar
+            
+            heurEstado = 11; // Avança para o estado de comparação
+            tuneMax = -9999.0f; tuneMin = 9999.0f;
             tuneTempoReferencia = agoraMil;
-        } else {
-            DesligarSintonia(); 
         }
+        return;
+    }
+    
+    // Estado 11: Janelas de Comparação Contínua de Kp
+    if (heurEstado == 11) { 
+        if (agoraMil - tuneTempoReferencia >= 900000) {
+            float variacaoAtual = tuneMax - tuneMin;
+            float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
+            
+            // A variação atual superou a variação do passado E passou do limite mínimo de ruído?
+            if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) { 
+                // A oscilação aumentou! Passamos do limite ideal do Kp.
+                DefinirAjustes(dispKp - passoKp, 0, 0); // Recua
+                passoKp /= 4.0f; // Reduz o passo (ex: de 20 para 5)
+                
+                if (passoKp < 2.0f) { 
+                    heurEstado = 2; // Kp finalizado. Vai para o Ki.
+                    tuneMax = -9999.0f; tuneMin = 9999.0f; // Zera para a nova fase
+                }
+            } else {
+                // A oscilação diminuiu ou ficou igual. Seguro subir mais o Kp.
+                DefinirAjustes(dispKp + passoKp, 0, 0);
+            }
+            
+            // Atualiza o histórico para a próxima janela
+            tuneMaxAntigo = tuneMax;
+            tuneMinAntigo = tuneMin;
+            
+            tuneMax = -9999.0f; tuneMin = 9999.0f;
+            tuneTempoReferencia = agoraMil;
+        }
+        return;
+    }
+
+    // =========================================================
+    // ESTÁGIO 2: AJUSTE DO Ki (Janelas de 30 min = 1.800.000 ms)
+    // =========================================================
+    // Estado 2: Primeira janela Ki
+    if (heurEstado == 2) { 
+        if (agoraMil - tuneTempoReferencia >= 1800000) {
+            tuneMaxAntigo = tuneMax;
+            tuneMinAntigo = tuneMin;
+            
+            float erroAtual = abs(*meuSetpoint - entradaLida);
+            if (erroAtual <= 0.2f) {
+                heurEstado = 3; // Erro já está zerado, vai pro Kd
+            } else {
+                DefinirAjustes(dispKp, dispKi + passoKi, 0); // Adiciona Ki
+                heurEstado = 21; // Vai para comparação
+            }
+            tuneMax = -9999.0f; tuneMin = 9999.0f;
+            tuneTempoReferencia = agoraMil;
+        }
+        return;
+    }
+    
+    // Estado 21: Janelas de Comparação Contínua de Ki
+    if (heurEstado == 21) { 
+        if (agoraMil - tuneTempoReferencia >= 1800000) {
+            float erroAtual = abs(*meuSetpoint - entradaLida);
+            float variacaoAtual = tuneMax - tuneMin;
+            float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
+
+            if (erroAtual <= 0.2f) {
+                heurEstado = 3; // Temperatura alcançou o SP perfeitamente
+            } 
+            else if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) {
+                // O Ki adicionado causou oscilação antes de alcançar o SP. Recua!
+                DefinirAjustes(dispKp, dispKi - passoKi, 0);
+                passoKi /= 2.0f; 
+            } 
+            else {
+                // Seguro continuar adicionando Ki para buscar o SP
+                DefinirAjustes(dispKp, dispKi + passoKi, 0);
+            }
+
+            tuneMaxAntigo = tuneMax;
+            tuneMinAntigo = tuneMin;
+            tuneMax = -9999.0f; tuneMin = 9999.0f;
+            tuneTempoReferencia = agoraMil;
+        }
+        return;
+    }
+
+    // =========================================================
+    // ESTÁGIO 3: AJUSTE DO Kd (Janelas de 10 min = 600.000 ms)
+    // =========================================================
+    if (heurEstado == 3) {
+        if (agoraMil - tuneTempoReferencia >= 600000) {
+            float overshootAtual = tuneMax - *meuSetpoint;
+            
+            if (overshootAtual > 0.5f) { 
+                // Passou do Setpoint pra cima, aplica mais freio derivativo
+                DefinirAjustes(dispKp, dispKi, dispKd + passoKd);
+                tuneTempoReferencia = agoraMil;
+            } else {
+                // Sem overshoot e erro zerado. Auto-Tune concluído com perfeição!
+                DesligarSintonia(); 
+            }
+            tuneMax = -9999.0f; tuneMin = 9999.0f;
+        }
+        return;
     }
 }
 
