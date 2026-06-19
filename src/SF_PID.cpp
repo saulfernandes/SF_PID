@@ -212,7 +212,7 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
     // Estado 0: Inicialização
     // =========================================================
     if (heurEstado == 0) {
-        DefinirAjustes(50.0f, 0.0f, 0.0f); 
+        DefinirAjustes(100.0f, 0.0f, 0.0f); // Kp inicial alterado para 100
         passoKp = 20.0f; passoKi = 0.0025f; passoKd = 0.001f;
         tuneMax = -9999.0f; 
         tuneMin = 9999.0f;
@@ -224,47 +224,88 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
     // =========================================================
     // ESTÁGIO 1: AJUSTE DO Kp (Janelas de 15 min = 900.000 ms)
     // =========================================================
-    // Estado 1: Primeira janela (Coleta a linha de base)
+    // Estado 1: Primeira janela (Decide a direção da busca)
     if (heurEstado == 1) { 
         if (agoraMil - tuneTempoReferencia >= 900000) {
+            float variacaoAtual = tuneMax - tuneMin;
             tuneMaxAntigo = tuneMax;
             tuneMinAntigo = tuneMin;
+
+            if (variacaoAtual > 0.5f) {
+                // Começou instável! Inverte o processo e busca a estabilidade descendo.
+                float novoKp = dispKp - passoKp;
+                if (novoKp < 1.0f) novoKp = 1.0f; // Proteção
+                DefinirAjustes(novoKp, 0, 0); 
+                heurEstado = 12; // Vai para o Modo de Descida
+            } else {
+                // Começou estável. Continua o processo normal subindo.
+                DefinirAjustes(dispKp + passoKp, 0, 0); 
+                heurEstado = 11; // Vai para o Modo de Subida
+            }
             
-            DefinirAjustes(dispKp + passoKp, 0, 0); // Sobe o Kp para testar
-            
-            heurEstado = 11; // Avança para o estado de comparação
             tuneMax = -9999.0f; tuneMin = 9999.0f;
             tuneTempoReferencia = agoraMil;
         }
         return;
     }
     
-    // Estado 11: Janelas de Comparação Contínua de Kp
+    // Estado 11: Modo de Subida (Procurando a instabilidade)
     if (heurEstado == 11) { 
         if (agoraMil - tuneTempoReferencia >= 900000) {
             float variacaoAtual = tuneMax - tuneMin;
             float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
             
-            // A variação atual superou a variação do passado E passou do limite mínimo de ruído?
             if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) { 
-                // A oscilação aumentou! Passamos do limite ideal do Kp.
-                DefinirAjustes(dispKp - passoKp, 0, 0); // Recua
-                passoKp /= 4.0f; // Reduz o passo (ex: de 20 para 5)
+                // Bateu no teto de instabilidade!
+                DefinirAjustes(dispKp - passoKp, 0, 0); // Recua para o último valor seguro
+                passoKp /= 4.0f; // Refina o passo (ex: de 20 para 5)
                 
                 if (passoKp < 2.0f) { 
-                    heurEstado = 2; // Kp finalizado. Vai para o Ki.
-                    tuneMax = -9999.0f; tuneMin = 9999.0f; // Zera para a nova fase
+                    heurEstado = 2; // Kp perfeito encontrado. Vai para o Ki.
+                } else {
+                    DefinirAjustes(dispKp + passoKp, 0, 0); // Tenta subir com o novo passo menor
                 }
             } else {
-                // A oscilação diminuiu ou ficou igual. Seguro subir mais o Kp.
+                // Seguro continuar subindo
                 DefinirAjustes(dispKp + passoKp, 0, 0);
             }
             
-            // Atualiza o histórico para a próxima janela
-            tuneMaxAntigo = tuneMax;
-            tuneMinAntigo = tuneMin;
-            
+            tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
             tuneMax = -9999.0f; tuneMin = 9999.0f;
+            
+            if (heurEstado == 2) { tuneMax = -9999.0f; tuneMin = 9999.0f; } // Zera para a fase Ki
+            tuneTempoReferencia = agoraMil;
+        }
+        return;
+    }
+
+    // Estado 12: Modo de Descida (Procurando o chão de estabilidade)
+    if (heurEstado == 12) {
+        if (agoraMil - tuneTempoReferencia >= 900000) {
+            float variacaoAtual = tuneMax - tuneMin;
+
+            if (variacaoAtual <= 0.5f) {
+                // Finalmente encontrou a estabilidade! O valor atual é bom.
+                passoKp /= 4.0f; // Refina o passo
+                
+                if (passoKp < 2.0f) {
+                    heurEstado = 2; // Kp perfeito encontrado
+                } else {
+                    // Agora que encontrou a base estável, inverte a direção para refinar subindo
+                    DefinirAjustes(dispKp + passoKp, 0, 0);
+                    heurEstado = 11; 
+                }
+            } else {
+                // Continua a retirar Kp até o sistema estabilizar
+                float novoKp = dispKp - passoKp;
+                if (novoKp < 1.0f) novoKp = 1.0f; // Proteção
+                DefinirAjustes(novoKp, 0, 0);
+            }
+            
+            tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
+            tuneMax = -9999.0f; tuneMin = 9999.0f;
+            
+            if (heurEstado == 2) { tuneMax = -9999.0f; tuneMin = 9999.0f; }
             tuneTempoReferencia = agoraMil;
         }
         return;
@@ -273,7 +314,6 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
     // =========================================================
     // ESTÁGIO 2: AJUSTE DO Ki (Janelas de 30 min = 1.800.000 ms)
     // =========================================================
-    // Estado 2: Primeira janela Ki
     if (heurEstado == 2) { 
         if (agoraMil - tuneTempoReferencia >= 1800000) {
             tuneMaxAntigo = tuneMax;
@@ -281,10 +321,10 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
             
             float erroAtual = abs(*meuSetpoint - entradaLida);
             if (erroAtual <= 0.2f) {
-                heurEstado = 3; // Erro já está zerado, vai pro Kd
+                heurEstado = 3; 
             } else {
-                DefinirAjustes(dispKp, dispKi + passoKi, 0); // Adiciona Ki
-                heurEstado = 21; // Vai para comparação
+                DefinirAjustes(dispKp, dispKi + passoKi, 0); 
+                heurEstado = 21; 
             }
             tuneMax = -9999.0f; tuneMin = 9999.0f;
             tuneTempoReferencia = agoraMil;
@@ -292,7 +332,6 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
         return;
     }
     
-    // Estado 21: Janelas de Comparação Contínua de Ki
     if (heurEstado == 21) { 
         if (agoraMil - tuneTempoReferencia >= 1800000) {
             float erroAtual = abs(*meuSetpoint - entradaLida);
@@ -300,20 +339,17 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
             float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
 
             if (erroAtual <= 0.2f) {
-                heurEstado = 3; // Temperatura alcançou o SP perfeitamente
+                heurEstado = 3; 
             } 
             else if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) {
-                // O Ki adicionado causou oscilação antes de alcançar o SP. Recua!
                 DefinirAjustes(dispKp, dispKi - passoKi, 0);
                 passoKi /= 2.0f; 
             } 
             else {
-                // Seguro continuar adicionando Ki para buscar o SP
                 DefinirAjustes(dispKp, dispKi + passoKi, 0);
             }
 
-            tuneMaxAntigo = tuneMax;
-            tuneMinAntigo = tuneMin;
+            tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
             tuneMax = -9999.0f; tuneMin = 9999.0f;
             tuneTempoReferencia = agoraMil;
         }
@@ -328,11 +364,9 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
             float overshootAtual = tuneMax - *meuSetpoint;
             
             if (overshootAtual > 0.5f) { 
-                // Passou do Setpoint pra cima, aplica mais freio derivativo
                 DefinirAjustes(dispKp, dispKi, dispKd + passoKd);
                 tuneTempoReferencia = agoraMil;
             } else {
-                // Sem overshoot e erro zerado. Auto-Tune concluído com perfeição!
                 DesligarSintonia(); 
             }
             tuneMax = -9999.0f; tuneMin = 9999.0f;
