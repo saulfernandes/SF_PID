@@ -36,7 +36,7 @@ class SF_PID {
     void Reiniciar();         
 
     // Condicionamento de Sinal e Filtros
-    void DefinirEntrada(Entrada tipoEntrada);
+    void DefinirEntrada(DfEntrada tipoEntrada);
     void DefinirEntrada(uint8_t tipoEntrada);
     void DefinirCoeficientes(float a, float b, float c, float offset);
     
@@ -87,7 +87,7 @@ class SF_PID {
 
     Controle modo = Controle::automatico;
     Acao acao = Acao::direto;
-    Entrada modoEntrada = Entrada::filtrada;
+    Entrada modoEntrada = DfEntrada::filtrada;
     Filtro modoFiltro = Filtro::nenhum;
     Sintonia modoSintonia = Sintonia::desligado;
     
