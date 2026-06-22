@@ -56,7 +56,7 @@ class SF_PID {
     void DesligarSintonia();
     bool SintoniaAtiva(); 
     
-    String ObterStatusSintonia(); // NOVO: Retorna o texto da etapa atual
+    String ObterStatusSintonia();
 
     // Funcoes de Consulta (Query) 
     float ObterKp();            
