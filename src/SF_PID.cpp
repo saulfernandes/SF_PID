@@ -188,8 +188,11 @@ bool SF_PID::Calcular() {
    MOTORES DE INTELIGÊNCIA
 ================================================================================== */
 void SF_PID::ExecutarRelay(float entradaLida) {
-    if (entradaLida > tuneMax) tuneMax = entradaLida;
-    if (entradaLida < tuneMin) tuneMin = entradaLida;
+    // 1. Ignora os picos nos dois primeiros ciclos para limpar o susto inicial e a resposta pendular
+    if (tuneCiclos >= 2) {
+        if (entradaLida > tuneMax) tuneMax = entradaLida;
+        if (entradaLida < tuneMin) tuneMin = entradaLida;
+    }
 
     bool cruzouCima = (entradaLida > *meuSetpoint + 0.1f);
     bool cruzouBaixo = (entradaLida < *meuSetpoint - 0.1f);
@@ -199,28 +202,49 @@ void SF_PID::ExecutarRelay(float entradaLida) {
         *minhaSaida = saidaMax;
         
         uint32_t agoraMil = millis();
-        tuneSomaPeriodo += (agoraMil - tuneUltimoCruzamento);
+
+        // Só acumula o tempo de período a partir do ciclo 2
+        if (tuneCiclos >= 2) {
+            tuneSomaPeriodo += (agoraMil - tuneUltimoCruzamento);
+        }
+
         tuneUltimoCruzamento = agoraMil;
         tuneCiclos++;
+
+        // A MÁGICA: No exato momento em que encerra o ciclo 2, zeramos o lixo térmico.
+        if (tuneCiclos == 2) {
+            tuneMax = -9999.0f;
+            tuneMin = 9999.0f;
+            tuneSomaPeriodo = 0; 
+        }
     } 
     else if (cruzouCima && estadoRele) {
         estadoRele = false;
         *minhaSaida = saidaMin;
     }
 
-    if (tuneCiclos >= 8) {
-        float Tu = (tuneSomaPeriodo / 8.0f) / 1000.0f;
+    // 8 ciclos estabilizados + 2 descartados = 10 ciclos totais exigidos
+    if (tuneCiclos >= 10) {
+        float Tu = (tuneSomaPeriodo / 8.0f) / 1000.0f; // Média limpa em segundos
         float amplitude = (tuneMax - tuneMin) / 2.0f;
         float Ku = (4.0f * (saidaMax - saidaMin)) / (3.14159f * amplitude);
 
         float nKp = 0, nKi = 0, nKd = 0;
 
         if (modoSintonia == Sintonia::zn || modoSintonia == Sintonia::zn_self) {
-            nKp = 0.6f * Ku; nKi = (2.0f * nKp) / Tu; nKd = (nKp * Tu) / 8.0f;
+            nKp = 0.6f * Ku; 
+            nKi = (2.0f * nKp) / Tu; 
+            nKd = (nKp * Tu) / 8.0f;
         } else {
-            nKp = 0.31f * Ku; nKi = nKp / (2.2f * Tu); nKd = (nKp * Tu) / 6.3f;
+            nKp = 0.31f * Ku; 
+            nKi = nKp / (2.2f * Tu); 
+            nKd = (nKp * Tu) / 6.3f;
         }
         
+        // ATENUAÇÃO DERIVATIVA PARA SISTEMAS TÉRMICOS DE ALTA INÉRCIA:
+        // Evita que ondas longas (Tu gigante) gerem um Kd astronômico que satura o PWM.
+        nKd = nKd * 0.02f; // Reduz o impacto derivativo mantendo apenas a força de micro-amortecimento
+
         DefinirAjustes(nKp, nKi, nKd);
 
         if (modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) {
