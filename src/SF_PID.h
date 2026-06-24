@@ -14,8 +14,9 @@ class SF_PID {
     enum class Entrada : uint8_t {filtrada, temperatura, pura}; 
     enum class Filtro : uint8_t {nenhum, emaAdaptativo, mediana, kalman1D}; 
     
-    // Novas Opcoes de Sintonia
+    // Opcoes de Sintonia
     enum class Sintonia : uint8_t {desligado, zn, tl, heuristica, self, zn_self, tl_self};
+    enum class Termica : uint8_t {normal, lenta};
 
     // Construtores
     SF_PID();
@@ -52,6 +53,8 @@ class SF_PID {
     // ===============================================================
     void DefinirModoSintonia(Sintonia modo);
     void DefinirModoSintonia(uint8_t modo);
+    void DefinirPerfilTermico(Termica perfil);
+    void DefinirPerfilTermico(uint8_t perfil);
     void LigarSintonia();
     void DesligarSintonia();
     bool SintoniaAtiva(); 
@@ -95,6 +98,7 @@ class SF_PID {
     Entrada modoEntrada = Entrada::filtrada;
     Filtro modoFiltro = Filtro::nenhum;
     Sintonia modoSintonia = Sintonia::desligado;
+    Termica perfilTermico = Termica::normal;
     
     bool sintoniaLigada = false;
 

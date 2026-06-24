@@ -28,15 +28,26 @@ float SF_PID::AplicarFiltro(float valor) {
     for (int i = 0; i < 15; i++) bufferMediana[i] = valor;
     primeiraLeitura = false;
   }
+  
   if (modoFiltro == Filtro::nenhum) return valor;
+  
   if (modoFiltro == Filtro::emaAdaptativo) {
-    float variacao = abs(valor - ultimoValorEMA);
-    float proporcao = variacao / rangeVar; 
-    alpha = alphaMin + (alphaMax - alphaMin) * proporcao;
-    alpha = constrain(alpha, alphaMin, alphaMax);
+    static uint32_t ultimoCalcAlpha = 0;
+    
+    // Atualiza o peso (alpha) apenas a cada 250ms para evitar nervosismo
+    if (millis() - ultimoCalcAlpha >= 250) {
+        float variacao = abs(valor - ultimoValorEMA);
+        float proporcao = variacao / rangeVar; 
+        alpha = alphaMin + (alphaMax - alphaMin) * proporcao;
+        alpha = constrain(alpha, alphaMin, alphaMax);
+        ultimoCalcAlpha = millis();
+    }
+    
+    // A filtragem matemática da temperatura continua a acontecer sempre
     ultimoValorEMA = (alpha * valor) + ((1.0f - alpha) * ultimoValorEMA);
     return ultimoValorEMA;
   }
+  
   if (modoFiltro == Filtro::mediana) {
     bufferMediana[indiceMediana] = valor;
     indiceMediana = (indiceMediana + 1) % 15;
@@ -51,6 +62,7 @@ float SF_PID::AplicarFiltro(float valor) {
     }
     return temp[7];
   }
+  
   if (modoFiltro == Filtro::kalman1D) {
     erroKalman += qProcesso;
     float K = erroKalman / (erroKalman + rMedida);
@@ -82,6 +94,8 @@ void SF_PID::ConfigurarFiltroKalman(float ruidoMedida, float ruidoProcesso) { rM
 /* Configuração da SINTONIA (AutoTune) */
 void SF_PID::DefinirModoSintonia(Sintonia modo) { modoSintonia = modo; }
 void SF_PID::DefinirModoSintonia(uint8_t modo) { modoSintonia = (Sintonia)modo; }
+void SF_PID::DefinirPerfilTermico(Termica perfil) { perfilTermico = perfil; }
+void SF_PID::DefinirPerfilTermico(uint8_t perfil) { perfilTermico = (Termica)perfil; }
 
 void SF_PID::LigarSintonia() {
   if (modoSintonia == Sintonia::desligado) return;
@@ -106,7 +120,13 @@ String SF_PID::ObterStatusSintonia() {
 
     if (modoSintonia == Sintonia::zn || modoSintonia == Sintonia::tl || 
         modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) {
-        return "Rele: Buscando oscilacao sustentada (Ciclo " + String(tuneCiclos) + "/8)";
+        
+        // Separa a mensagem visual para a IHM conforme solicitado
+        if (tuneCiclos < 2) {
+            return "Rele: Fase de aproximacao (Ciclo " + String(tuneCiclos + 1) + "/2)";
+        } else {
+            return "Rele: Buscando oscilacao sustentada (Ciclo " + String(tuneCiclos - 1) + "/5)";
+        }
     }
 
     if (modoSintonia == Sintonia::heuristica) {
@@ -188,7 +208,6 @@ bool SF_PID::Calcular() {
    MOTORES DE INTELIGÊNCIA
 ================================================================================== */
 void SF_PID::ExecutarRelay(float entradaLida) {
-    // 1. Ignora os picos nos dois primeiros ciclos para limpar o susto inicial e a resposta pendular
     if (tuneCiclos >= 2) {
         if (entradaLida > tuneMax) tuneMax = entradaLida;
         if (entradaLida < tuneMin) tuneMin = entradaLida;
@@ -203,7 +222,6 @@ void SF_PID::ExecutarRelay(float entradaLida) {
         
         uint32_t agoraMil = millis();
 
-        // Só acumula o tempo de período a partir do ciclo 2
         if (tuneCiclos >= 2) {
             tuneSomaPeriodo += (agoraMil - tuneUltimoCruzamento);
         }
@@ -211,7 +229,6 @@ void SF_PID::ExecutarRelay(float entradaLida) {
         tuneUltimoCruzamento = agoraMil;
         tuneCiclos++;
 
-        // A MÁGICA: No exato momento em que encerra o ciclo 2, zeramos o lixo térmico.
         if (tuneCiclos == 2) {
             tuneMax = -9999.0f;
             tuneMin = 9999.0f;
@@ -223,9 +240,9 @@ void SF_PID::ExecutarRelay(float entradaLida) {
         *minhaSaida = saidaMin;
     }
 
-    // 8 ciclos estabilizados + 2 descartados = 10 ciclos totais exigidos
-    if (tuneCiclos >= 10) {
-        float Tu = (tuneSomaPeriodo / 8.0f) / 1000.0f; // Média limpa em segundos
+    // 5 ciclos estabilizados + 2 descartados = 7 ciclos totais exigidos
+    if (tuneCiclos >= 7) {
+        float Tu = (tuneSomaPeriodo / 5.0f) / 1000.0f; // Média limpa em segundos
         float amplitude = (tuneMax - tuneMin) / 2.0f;
         float Ku = (4.0f * (saidaMax - saidaMin)) / (3.14159f * amplitude);
 
@@ -241,9 +258,11 @@ void SF_PID::ExecutarRelay(float entradaLida) {
             nKd = (nKp * Tu) / 6.3f;
         }
         
-        // ATENUAÇÃO DERIVATIVA PARA SISTEMAS TÉRMICOS DE ALTA INÉRCIA:
-        // Evita que ondas longas (Tu gigante) gerem um Kd astronômico que satura o PWM.
-        nKd = nKd * 0.02f; // Reduz o impacto derivativo mantendo apenas a força de micro-amortecimento
+        if (perfilTermico == Termica::lenta) {
+            nKd = nKd * 0.02f; // Esmaga o Derivative Kick
+            // Opcional: Se notar que o Kp também fica violento demais no modo lento, 
+            // pode aplicar um recuo aqui, ex: nKp = nKp * 0.8f;
+        } 
 
         DefinirAjustes(nKp, nKi, nKd);
 
