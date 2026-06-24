@@ -169,7 +169,7 @@ bool SF_PID::Calcular() {
   uint32_t agora = micros();
   uint32_t variacaoTempo = (agora - ultimoTempo);
   
-  // 2. MATEMÁTICA PID CLÁSSICA
+  // 2. MATEMÁTICA PID CLÁSSICA COM ANTI-WINDUP DINÂMICO
   if (variacaoTempo >= tempoAmostragemUs) {
     float dEntrada = entrada - ultimaEntrada;
     erro = *meuSetpoint - entrada;
@@ -179,16 +179,21 @@ bool SF_PID::Calcular() {
         erro = -erro;
     }
 
-    // O Coração do PID Clássico (PonE - Proporcional no Erro)
-    termoP = kp * erro;          // Proporcional no Erro (Empurra pro Alvo)
-    termoI = ki * erro;          // Integral (Mata o erro de regime)
-    termoD = -kd * dEntrada;     // Derivativo na Medição (Freia a velocidade, não chuta no SP)
+    termoP = kp * erro;          
+    termoD = -kd * dEntrada;     
+    termoI = ki * erro;
+    
+    // ANTI-WINDUP POR SATURAÇÃO DINÂMICA (CLAMPING)
+    float saidaDesejada = termoP + somaSaida + termoI + termoD;
+    
+    bool saturadoMax = (saidaDesejada > saidaMax) && (erro > 0); 
+    bool saturadoMin = (saidaDesejada < saidaMin) && (erro < 0); 
 
-    // Acumulador Integral com Anti-Windup
-    somaSaida += termoI;
+    if (!saturadoMax && !saturadoMin) {
+        somaSaida += termoI;
+    }
+    
     somaSaida = constrain(somaSaida, saidaMin, saidaMax);
-
-    // Soma Final
     *minhaSaida = constrain(termoP + somaSaida + termoD, saidaMin, saidaMax);
 
     ultimoErro = erro; ultimaEntrada = entrada; ultimoTempo = agora;
@@ -258,10 +263,11 @@ void SF_PID::ExecutarRelay(float entradaLida) {
             nKd = (nKp * Tu) / 6.3f;
         }
         
+        // CORREÇÃO: Atenuação agressiva para sistemas térmicos de alta inércia
         if (perfilTermico == Termica::lenta) {
-            nKd = nKd * 0.02f; // Esmaga o Derivative Kick
-            // Opcional: Se notar que o Kp também fica violento demais no modo lento, 
-            // pode aplicar um recuo aqui, ex: nKp = nKp * 0.8f;
+            nKd = nKd * 0.02f; 
+            nKi = nKi * 0.25f; 
+            nKp = nKp * 0.85f; 
         } 
 
         DefinirAjustes(nKp, nKi, nKd);
@@ -281,7 +287,7 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
     // Estado 0: Inicialização
     // =========================================================
     if (heurEstado == 0) {
-        DefinirAjustes(100.0f, 0.0f, 0.0f); // Kp inicial de 100
+        DefinirAjustes(100.0f, 0.0f, 0.0f); 
         passoKp = 20.0f; passoKi = 0.0025f; passoKd = 0.001f;
         heurEstado = 1; 
         tunePassos = 1;
@@ -296,41 +302,38 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
     // =========================================================
     if (heurEstado == 1 || heurEstado == 11 || heurEstado == 12) {
         
-        // FASE CEGA: 10 minutos (600.000 ms). Ignora a rampa térmica.
         if (tempoNaJanela < 600000) {
             tuneMax = entradaLida;
             tuneMin = entradaLida;
         } 
-        // FASE DE OBSERVAÇÃO: 5 minutos finais (300.000 ms). Captura a oscilação real.
         else if (tempoNaJanela < 900000) {
             if (entradaLida > tuneMax) tuneMax = entradaLida;
             if (entradaLida < tuneMin) tuneMin = entradaLida;
         } 
-        // FIM DA JANELA: Executa a Lógica de Tomada de Decisão
         else {
             float variacaoAtual = tuneMax - tuneMin;
 
-            if (heurEstado == 1) { // Primeira Janela (Decide Direção)
+            if (heurEstado == 1) { 
                 tuneMaxAntigo = tuneMax;
                 tuneMinAntigo = tuneMin;
                 if (variacaoAtual > 0.5f) {
                     float novoKp = dispKp - passoKp;
                     DefinirAjustes(novoKp < 1.0f ? 1.0f : novoKp, 0, 0); 
-                    heurEstado = 12; // Modo de Descida
+                    heurEstado = 12; 
                 } else {
                     DefinirAjustes(dispKp + passoKp, 0, 0); 
-                    heurEstado = 11; // Modo de Subida
+                    heurEstado = 11; 
                 }
                 tunePassos++;
             } 
-            else if (heurEstado == 11) { // Modo de Subida (Procura Instabilidade)
+            else if (heurEstado == 11) { 
                 float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
                 if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) { 
                     DefinirAjustes(dispKp - passoKp, 0, 0); 
                     passoKp /= 4.0f; 
                     if (passoKp < 2.0f) { 
-                        heurEstado = 2; // Kp perfeito
-                        tunePassos = 1; // Zera para fase Ki
+                        heurEstado = 2; 
+                        tunePassos = 1; 
                     } else {
                         DefinirAjustes(dispKp + passoKp, 0, 0); 
                         tunePassos++;
@@ -341,15 +344,15 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
                 }
                 tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
             }
-            else if (heurEstado == 12) { // Modo de Descida (Procura Estabilidade)
+            else if (heurEstado == 12) { 
                 if (variacaoAtual <= 0.5f) {
                     passoKp /= 4.0f; 
                     if (passoKp < 2.0f) {
-                        heurEstado = 2; // Kp perfeito
-                        tunePassos = 1; // Zera para fase Ki
+                        heurEstado = 2; 
+                        tunePassos = 1; 
                     } else {
                         DefinirAjustes(dispKp + passoKp, 0, 0);
-                        heurEstado = 11; // Inverte para subir
+                        heurEstado = 11; 
                         tunePassos++;
                     }
                 } else {
@@ -360,7 +363,7 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
                 tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
             }
 
-            tuneTempoReferencia = agoraMil; // Zera cronômetro para próxima janela
+            tuneTempoReferencia = agoraMil; 
         }
         return;
     }
@@ -370,17 +373,14 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
     // =========================================================
     if (heurEstado == 2 || heurEstado == 21) {
         
-        // FASE CEGA: 20 minutos (1.200.000 ms)
         if (tempoNaJanela < 1200000) {
             tuneMax = entradaLida;
             tuneMin = entradaLida;
         } 
-        // FASE DE OBSERVAÇÃO: 10 minutos finais (600.000 ms)
         else if (tempoNaJanela < 1800000) {
             if (entradaLida > tuneMax) tuneMax = entradaLida;
             if (entradaLida < tuneMin) tuneMin = entradaLida;
         } 
-        // FIM DA JANELA: Lógica de Decisão do Ki
         else {
             float erroAtual = abs(*meuSetpoint - entradaLida);
             float variacaoAtual = tuneMax - tuneMin;
@@ -390,7 +390,7 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
                 tuneMinAntigo = tuneMin;
                 if (erroAtual <= 0.2f) {
                     heurEstado = 3; 
-                    tunePassos = 1; // Zera para fase Kd
+                    tunePassos = 1; 
                 } else {
                     DefinirAjustes(dispKp, dispKi + passoKi, 0); 
                     heurEstado = 21; 
@@ -401,7 +401,7 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
                 float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
                 if (erroAtual <= 0.2f) {
                     heurEstado = 3; 
-                    tunePassos = 1; // Zera para fase Kd
+                    tunePassos = 1; 
                 } else if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) {
                     DefinirAjustes(dispKp, dispKi - passoKi, 0);
                     passoKi /= 2.0f; 
@@ -421,7 +421,6 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
     // ESTÁGIO 3: AJUSTE DO Kd (Janelas de 10 min = 600.000 ms)
     // =========================================================
     if (heurEstado == 3) {
-        // Para o Kd, precisamos capturar picos o tempo TODO (sem fase cega)
         if (entradaLida > tuneMax) tuneMax = entradaLida;
         
         if (tempoNaJanela >= 600000) {
@@ -434,7 +433,7 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
             } else {
                 DesligarSintonia(); 
             }
-            tuneMax = -9999.0f; // Reinicia apenas o Max
+            tuneMax = -9999.0f; 
         }
         return;
     }
