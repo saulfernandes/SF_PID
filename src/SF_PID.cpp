@@ -108,6 +108,23 @@ void SF_PID::LigarSintonia() {
   
   if(modoSintonia == Sintonia::heuristica) heurEstado = 0; 
   if(modoSintonia == Sintonia::self || modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) selfAtuacoes = 0;
+
+  // =====================================================================
+  // KICKSTART E LIMPEZA DE MEMÓRIA
+  // =====================================================================
+  if (modoSintonia == Sintonia::zn || modoSintonia == Sintonia::tl || 
+      modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) {
+      
+      // Se a temperatura estiver abaixo do Setpoint, força a resistência pro máximo.
+      // Se estiver acima, desliga para forçar a descida.
+      if (*minhaEntrada < *meuSetpoint) {
+          estadoRele = true;
+          *minhaSaida = saidaMax; 
+      } else {
+          estadoRele = false;
+          *minhaSaida = saidaMin;
+      }
+  }
 }
 
 void SF_PID::DesligarSintonia() { sintoniaLigada = false; }
