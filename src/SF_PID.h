@@ -73,6 +73,11 @@ class SF_PID {
     uint8_t ObterModo();        
     uint8_t ObterDirecao();     
 
+    // NOVO: Funcoes de Consulta Fisica da Maquina (AutoTune Relé)
+    float ObterKu();
+    float ObterTu();
+    float ObterAmplitude();
+
   private:
 
     float ProcessarEntrada(float valorLido);
@@ -126,7 +131,12 @@ class SF_PID {
     uint8_t tuneCiclos = 0;
     float tuneSomaPeriodo = 0;
     bool estadoRele = false;
-    uint16_t tunePassos = 1; // NOVO: Rastreador de calculos
+    uint16_t tunePassos = 1; 
+
+    // NOVO: Variaveis de exposição física da sintonia
+    float dispKu = 0.0f;
+    float dispTu = 0.0f;
+    float dispAmplitude = 0.0f;
 
     // Memorias Heuristica (Manual)
     uint8_t heurEstado = 0;

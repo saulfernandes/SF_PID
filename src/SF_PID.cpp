@@ -34,7 +34,6 @@ float SF_PID::AplicarFiltro(float valor) {
   if (modoFiltro == Filtro::emaAdaptativo) {
     static uint32_t ultimoCalcAlpha = 0;
     
-    // Atualiza o peso (alpha) apenas a cada 250ms para evitar nervosismo
     if (millis() - ultimoCalcAlpha >= 250) {
         float variacao = abs(valor - ultimoValorEMA);
         float proporcao = variacao / rangeVar; 
@@ -43,7 +42,6 @@ float SF_PID::AplicarFiltro(float valor) {
         ultimoCalcAlpha = millis();
     }
     
-    // A filtragem matemática da temperatura continua a acontecer sempre
     ultimoValorEMA = (alpha * valor) + ((1.0f - alpha) * ultimoValorEMA);
     return ultimoValorEMA;
   }
@@ -106,17 +104,16 @@ void SF_PID::LigarSintonia() {
   tuneUltimoCruzamento = millis();
   tunePassos = 1;
   
+  // Limpa memórias de exposição física
+  dispKu = 0.0f;
+  dispTu = 0.0f;
+  dispAmplitude = 0.0f;
+  
   if(modoSintonia == Sintonia::heuristica) heurEstado = 0; 
   if(modoSintonia == Sintonia::self || modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) selfAtuacoes = 0;
 
-  // =====================================================================
-  // KICKSTART E LIMPEZA DE MEMÓRIA
-  // =====================================================================
   if (modoSintonia == Sintonia::zn || modoSintonia == Sintonia::tl || 
       modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) {
-      
-      // Se a temperatura estiver abaixo do Setpoint, força a resistência pro máximo.
-      // Se estiver acima, desliga para forçar a descida.
       if (*minhaEntrada < *meuSetpoint) {
           estadoRele = true;
           *minhaSaida = saidaMax; 
@@ -137,8 +134,6 @@ String SF_PID::ObterStatusSintonia() {
 
     if (modoSintonia == Sintonia::zn || modoSintonia == Sintonia::tl || 
         modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self) {
-        
-        // Separa a mensagem visual para a IHM conforme solicitado
         if (tuneCiclos < 2) {
             return "Rele: Fase de aproximacao (Ciclo " + String(tuneCiclos + 1) + "/2)";
         } else {
@@ -164,17 +159,12 @@ String SF_PID::ObterStatusSintonia() {
     return "Status Desconhecido";
 }
 
-/* =================================================================================
-   O CÉREBRO: Calcular() com Condicionamento Desvinculado
-================================================================================== */
 bool SF_PID::Calcular() {
   if (modo == Controle::manual) return false;
   
-  // 1. CONDICIONAMENTO CONTÍNUO
   float entrada = ProcessarEntrada(*minhaEntrada);
   *minhaEntrada = entrada; 
 
-  // ROTA A: SINTONIA RELÉ (Bang-Bang Contínuo)
   bool isRelay = (modoSintonia == Sintonia::zn || modoSintonia == Sintonia::tl || 
                   modoSintonia == Sintonia::zn_self || modoSintonia == Sintonia::tl_self);
                   
@@ -186,7 +176,6 @@ bool SF_PID::Calcular() {
   uint32_t agora = micros();
   uint32_t variacaoTempo = (agora - ultimoTempo);
   
-  // 2. MATEMÁTICA PID CLÁSSICA COM ANTI-WINDUP DINÂMICO
   if (variacaoTempo >= tempoAmostragemUs) {
     float dEntrada = entrada - ultimaEntrada;
     erro = *meuSetpoint - entrada;
@@ -200,7 +189,6 @@ bool SF_PID::Calcular() {
     termoD = -kd * dEntrada;     
     termoI = ki * erro;
     
-    // ANTI-WINDUP POR SATURAÇÃO DINÂMICA (CLAMPING)
     float saidaDesejada = termoP + somaSaida + termoI + termoD;
     
     bool saturadoMax = (saidaDesejada > saidaMax) && (erro > 0); 
@@ -215,7 +203,6 @@ bool SF_PID::Calcular() {
 
     ultimoErro = erro; ultimaEntrada = entrada; ultimoTempo = agora;
 
-    // ROTA C: SUPERVISORES
     if (sintoniaLigada) {
         if (modoSintonia == Sintonia::heuristica) ExecutarHeuristica(entrada);
         else if (modoSintonia == Sintonia::self) ExecutarSelf(entrada);
@@ -226,9 +213,6 @@ bool SF_PID::Calcular() {
   return false;
 }
 
-/* =================================================================================
-   MOTORES DE INTELIGÊNCIA
-================================================================================== */
 void SF_PID::ExecutarRelay(float entradaLida) {
     if (tuneCiclos >= 2) {
         if (entradaLida > tuneMax) tuneMax = entradaLida;
@@ -262,11 +246,15 @@ void SF_PID::ExecutarRelay(float entradaLida) {
         *minhaSaida = saidaMin;
     }
 
-    // 5 ciclos estabilizados + 2 descartados = 7 ciclos totais exigidos
     if (tuneCiclos >= 7) {
-        float Tu = (tuneSomaPeriodo / 5.0f) / 1000.0f; // Média limpa em segundos
+        float Tu = (tuneSomaPeriodo / 5.0f) / 1000.0f; 
         float amplitude = (tuneMax - tuneMin) / 2.0f;
         float Ku = (4.0f * (saidaMax - saidaMin)) / (3.14159f * amplitude);
+        
+        // NOVO: Expõe a física da máquina antes de modificar com ganhos de livro
+        dispKu = Ku;
+        dispTu = Tu;
+        dispAmplitude = amplitude;
 
         float nKp = 0, nKi = 0, nKd = 0;
 
@@ -280,7 +268,6 @@ void SF_PID::ExecutarRelay(float entradaLida) {
             nKd = (nKp * Tu) / 6.3f;
         }
         
-        // CORREÇÃO: Atenuação agressiva para sistemas térmicos de alta inércia
         if (perfilTermico == Termica::lenta) {
             nKd = nKd * 0.02f; 
             nKi = nKi * 0.25f; 
@@ -300,9 +287,6 @@ void SF_PID::ExecutarRelay(float entradaLida) {
 void SF_PID::ExecutarHeuristica(float entradaLida) {
     uint32_t agoraMil = millis();
 
-    // =========================================================
-    // Estado 0: Inicialização
-    // =========================================================
     if (heurEstado == 0) {
         DefinirAjustes(100.0f, 0.0f, 0.0f); 
         passoKp = 20.0f; passoKi = 0.0025f; passoKd = 0.001f;
@@ -314,25 +298,16 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
 
     uint32_t tempoNaJanela = agoraMil - tuneTempoReferencia;
 
-    // =========================================================
-    // ESTÁGIO 1: AJUSTE DO Kp (Janelas de 15 min = 900.000 ms)
-    // =========================================================
     if (heurEstado == 1 || heurEstado == 11 || heurEstado == 12) {
-        
         if (tempoNaJanela < 600000) {
-            tuneMax = entradaLida;
-            tuneMin = entradaLida;
-        } 
-        else if (tempoNaJanela < 900000) {
+            tuneMax = entradaLida; tuneMin = entradaLida;
+        } else if (tempoNaJanela < 900000) {
             if (entradaLida > tuneMax) tuneMax = entradaLida;
             if (entradaLida < tuneMin) tuneMin = entradaLida;
-        } 
-        else {
+        } else {
             float variacaoAtual = tuneMax - tuneMin;
-
             if (heurEstado == 1) { 
-                tuneMaxAntigo = tuneMax;
-                tuneMinAntigo = tuneMin;
+                tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
                 if (variacaoAtual > 0.5f) {
                     float novoKp = dispKp - passoKp;
                     DefinirAjustes(novoKp < 1.0f ? 1.0f : novoKp, 0, 0); 
@@ -342,90 +317,53 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
                     heurEstado = 11; 
                 }
                 tunePassos++;
-            } 
-            else if (heurEstado == 11) { 
+            } else if (heurEstado == 11) { 
                 float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
                 if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) { 
                     DefinirAjustes(dispKp - passoKp, 0, 0); 
                     passoKp /= 4.0f; 
-                    if (passoKp < 2.0f) { 
-                        heurEstado = 2; 
-                        tunePassos = 1; 
-                    } else {
-                        DefinirAjustes(dispKp + passoKp, 0, 0); 
-                        tunePassos++;
-                    }
+                    if (passoKp < 2.0f) { heurEstado = 2; tunePassos = 1; } 
+                    else { DefinirAjustes(dispKp + passoKp, 0, 0); tunePassos++; }
                 } else {
-                    DefinirAjustes(dispKp + passoKp, 0, 0);
-                    tunePassos++;
+                    DefinirAjustes(dispKp + passoKp, 0, 0); tunePassos++;
                 }
                 tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
-            }
-            else if (heurEstado == 12) { 
+            } else if (heurEstado == 12) { 
                 if (variacaoAtual <= 0.5f) {
                     passoKp /= 4.0f; 
-                    if (passoKp < 2.0f) {
-                        heurEstado = 2; 
-                        tunePassos = 1; 
-                    } else {
-                        DefinirAjustes(dispKp + passoKp, 0, 0);
-                        heurEstado = 11; 
-                        tunePassos++;
-                    }
+                    if (passoKp < 2.0f) { heurEstado = 2; tunePassos = 1; } 
+                    else { DefinirAjustes(dispKp + passoKp, 0, 0); heurEstado = 11; tunePassos++; }
                 } else {
                     float novoKp = dispKp - passoKp;
-                    DefinirAjustes(novoKp < 1.0f ? 1.0f : novoKp, 0, 0);
-                    tunePassos++;
+                    DefinirAjustes(novoKp < 1.0f ? 1.0f : novoKp, 0, 0); tunePassos++;
                 }
                 tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
             }
-
             tuneTempoReferencia = agoraMil; 
         }
         return;
     }
 
-    // =========================================================
-    // ESTÁGIO 2: AJUSTE DO Ki (Janelas de 30 min = 1.800.000 ms)
-    // =========================================================
     if (heurEstado == 2 || heurEstado == 21) {
-        
         if (tempoNaJanela < 1200000) {
-            tuneMax = entradaLida;
-            tuneMin = entradaLida;
-        } 
-        else if (tempoNaJanela < 1800000) {
+            tuneMax = entradaLida; tuneMin = entradaLida;
+        } else if (tempoNaJanela < 1800000) {
             if (entradaLida > tuneMax) tuneMax = entradaLida;
             if (entradaLida < tuneMin) tuneMin = entradaLida;
-        } 
-        else {
+        } else {
             float erroAtual = abs(*meuSetpoint - entradaLida);
             float variacaoAtual = tuneMax - tuneMin;
-
             if (heurEstado == 2) {
-                tuneMaxAntigo = tuneMax;
-                tuneMinAntigo = tuneMin;
-                if (erroAtual <= 0.2f) {
-                    heurEstado = 3; 
-                    tunePassos = 1; 
-                } else {
-                    DefinirAjustes(dispKp, dispKi + passoKi, 0); 
-                    heurEstado = 21; 
-                    tunePassos++;
-                }
-            } 
-            else if (heurEstado == 21) {
+                tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
+                if (erroAtual <= 0.2f) { heurEstado = 3; tunePassos = 1; } 
+                else { DefinirAjustes(dispKp, dispKi + passoKi, 0); heurEstado = 21; tunePassos++; }
+            } else if (heurEstado == 21) {
                 float variacaoAntiga = tuneMaxAntigo - tuneMinAntigo;
-                if (erroAtual <= 0.2f) {
-                    heurEstado = 3; 
-                    tunePassos = 1; 
-                } else if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) {
-                    DefinirAjustes(dispKp, dispKi - passoKi, 0);
-                    passoKi /= 2.0f; 
-                    tunePassos++;
+                if (erroAtual <= 0.2f) { heurEstado = 3; tunePassos = 1; } 
+                else if (variacaoAtual > variacaoAntiga && variacaoAtual > 0.5f) {
+                    DefinirAjustes(dispKp, dispKi - passoKi, 0); passoKi /= 2.0f; tunePassos++;
                 } else {
-                    DefinirAjustes(dispKp, dispKi + passoKi, 0);
-                    tunePassos++;
+                    DefinirAjustes(dispKp, dispKi + passoKi, 0); tunePassos++;
                 }
                 tuneMaxAntigo = tuneMax; tuneMinAntigo = tuneMin;
             }
@@ -434,19 +372,13 @@ void SF_PID::ExecutarHeuristica(float entradaLida) {
         return;
     }
 
-    // =========================================================
-    // ESTÁGIO 3: AJUSTE DO Kd (Janelas de 10 min = 600.000 ms)
-    // =========================================================
     if (heurEstado == 3) {
         if (entradaLida > tuneMax) tuneMax = entradaLida;
-        
         if (tempoNaJanela >= 600000) {
             float overshootAtual = tuneMax - *meuSetpoint;
-            
             if (overshootAtual > 0.5f) { 
                 DefinirAjustes(dispKp, dispKi, dispKd + passoKd);
-                tuneTempoReferencia = agoraMil;
-                tunePassos++;
+                tuneTempoReferencia = agoraMil; tunePassos++;
             } else {
                 DesligarSintonia(); 
             }
@@ -487,9 +419,6 @@ void SF_PID::ExecutarSelf(float entradaLida) {
     }
 }
 
-/* =================================================================================
-   Funções Padrão de Configuração
-================================================================================== */
 void SF_PID::DefinirAjustes(float Kp, float Ki, float Kd) {
   if (Kp < 0 || Ki < 0 || Kd < 0) return;
   if (Ki == 0) somaSaida = 0;
@@ -550,3 +479,6 @@ float SF_PID::ObterSomaSaida() { return somaSaida; }
 float SF_PID::ObterAlpha() { return alpha; }  
 uint8_t SF_PID::ObterModo() { return static_cast<uint8_t>(modo); }
 uint8_t SF_PID::ObterDirecao() { return static_cast<uint8_t>(acao); }
+float SF_PID::ObterKu() { return dispKu; }
+float SF_PID::ObterTu() { return dispTu; }
+float SF_PID::ObterAmplitude() { return dispAmplitude; }
